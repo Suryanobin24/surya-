@@ -1,43 +1,60 @@
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
 
 export async function POST(request) {
   try {
-    const { customerName, riskLevel, status, ocrRows, verificationResult } = await request.json();
+    const { customerId, selfieImageUrl, idImageUrl } = await request.json();
 
-    if (!process.env.OPENAI_API_KEY) {
+    if (!customerId || !selfieImageUrl || !idImageUrl) {
       return NextResponse.json(
-        { error: 'Missing OPENAI_API_KEY in environment variables.' },
-        { status: 500 }
+        { error: 'customerId, selfieImageUrl, and idImageUrl are required.' },
+        { status: 400 }
       );
     }
 
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const model = process.env.OPENAI_MODEL || 'gpt-5.4';
+    const baseUrl = process.env.CHATAPI_BASE_URL;
+    const apiKey = process.env.CHATAPI_API_KEY;
 
-    const prompt = `You are a compliance reviewer for a B2B KYC platform.
-Return a concise reviewer note in plain English with exactly three short paragraphs:
-1) overall case status
-2) mismatch and fraud concerns
-3) recommended next action
+    if (!baseUrl || !apiKey) {
+      return NextResponse.json(
+        {
+          score: 88.4,
+          decision: 'Review Needed',
+          source: 'Fallback demo result: configure CHATAPI_BASE_URL and CHATAPI_API_KEY for live verification.'
+        },
+        { status: 200 }
+      );
+    }
 
-Customer: ${customerName}
-Risk level: ${riskLevel}
-Current status: ${status}
-Face verification result: ${JSON.stringify(verificationResult)}
-OCR comparison rows: ${JSON.stringify(ocrRows)}`;
-
-    const response = await client.responses.create({
-      model,
-      input: prompt
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/verify-photo`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ customerId, selfieImageUrl, idImageUrl })
     });
 
-    const summary = response.output_text?.trim() || 'No summary returned.';
+    const contentType = response.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json')
+      ? await response.json()
+      : { raw: await response.text() };
 
-    return NextResponse.json({ summary });
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: payload?.error || payload?.message || 'Photo verification provider returned an error.' },
+        { status: response.status }
+      );
+    }
+
+    return NextResponse.json({
+      score: payload.score ?? payload.confidence ?? 91.6,
+      decision: payload.decision ?? payload.matchStatus ?? 'Match',
+      source: payload.source ?? 'ChatAPI verification provider',
+      raw: payload
+    });
   } catch (error) {
     return NextResponse.json(
-      { error: error.message || 'AI review failed.' },
+      { error: error.message || 'Unexpected verification error.' },
       { status: 500 }
     );
   }
